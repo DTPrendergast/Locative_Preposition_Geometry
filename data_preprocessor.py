@@ -68,7 +68,8 @@ def main():
     # Load responses from MTurk survey
     responses = pd.read_csv(RESPONSES_FN)
     num_participants = responses.shape[0]
-    columns = responses.shape[1]
+    num_columns = responses.shape[1]
+    print("Num participants = ", num_participants, '          num_columns = ', num_columns)
     print('Responses DF Columns:  ', responses.columns)
     print(responses.head())
 
