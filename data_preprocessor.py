@@ -20,7 +20,7 @@ import pandas as pd
 # Program Option: Sparse Sim Data - Just using x-y plane as an example... Actual data was collected for cases of 'left','front', and 'front-left'.  Sparse data simulates data for 'right', 'back', and 'back-right' cases.  Dense simulated data would add data for the 'back-left', 'front-left', and 'front-right' cases.
 SPARSE_SIM_DATA = False
 
-# Program Option: Force Ideal Simulated Responses - some cases do not lend themselves to effective reflection of the scene and/or simulation of inverse locative prepositions.  For example, in the base case where the object configuration is left-up, some participants may view the 'above' locative preposition as "somewhat effective".  If we were to invert the response score to get simulated data for the 'below' locative preposition, the resulting score would be "somewhat effective" for the 'below' preposition when the objects are in the left-up configuration.  This is obviously ideal response score to "not effective at all" for the 'below' locative preposition with objects in the left-up configuration.  Otherwise, the response score is inverted from the base case data.
+# Program Option: Force Ideal Simulated Responses - some cases do not lend themselves to effective reflection of the scene and/or simulation of inverse locative prepositions.  For example, in the base case where the object configuration is left-up, some participants may view the 'above' locative preposition as "somewhat effective".  If we were to invert the response score to get simulated data for the 'below' locative preposition, the resulting score would be "somewhat effective" for the 'below' preposition when the objects are in the left-up configuration.  This option forces the ideal response score of "not effective at all" for the 'below' locative preposition with objects in the left-up configuration.  Otherwise, the response score is inverted from the base case data.
 FORCE_IDEAL_SIM_RESPONSE = True
 
 # Program Option:  Use Bad Data - True means that program will use the respondent data that was clearly spam.  Otherwise those datasets are ignored.
@@ -54,14 +54,20 @@ SCENE_LIST = list(range(1, NUM_SCENES + 1))
 # LP_LIST = ['above', 'against', 'behind', 'below', 'beside', 'close', 'front', 'left', 'near', 'next', 'on', 'on top', 'over', 'right']
 LP_LIST = ['above', 'against', 'behind']
 
+# In the raw response csv header, the locative prepositions are coded as numbers.  This dictionary enumerates which prepositions correlate with each number.
+LP_CODES_IN_RAW_RESPONSES = {'1': 'above', '2': 'against', '3': 'at', '4': 'beside', '5': 'front', '6': 'left', '7': 'on', '8': 'near', '9': 'close', '10': 'next', '11': 'over', '12': 'on top', '13': 'vicinity'}
+
 # Headers for training examples array/dictionary/dataframe
-PROCESSED_DATA_HEADERS = ['ParticipantID', 'Real/Sim', 'SceneID', 'Object Configuration', 'Vector to Target X', 'Vector to Target Y', 'Vector to Target Z', 'Vector to Reference X', 'Vector to Reference Y', 'Vector to Reference Z', 'LP Scores Vector']
+PROCESSED_DATA_HEADERS = ['ResponseID', 'Real/Sim', 'SceneID', 'Object Configuration', 'Tgt Location', 'Ref Location', 'Camera Location', 'Vector to Target X', 'Vector to Target Y', 'Vector to Target Z', 'Vector to Reference X', 'Vector to Reference Y', 'Vector to Reference Z', 'LP Scores Vector']
+
+
+
 
 
 # Set pandas options
 # pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
-pd.set_option('display.width', 500)
+pd.set_option('display.width', 999999)
 
 
 def main():
@@ -78,19 +84,62 @@ def main():
     print('Scene Data DF Columns:  ', scene_data.columns)
     print(scene_data.head())
 
+    # Create output dataframe and populate with raw data in usable format(s) without augmentation
+    processed_df_empty = pd.DataFrame(columns=PROCESSED_DATA_HEADERS)
+
+    # Augment data by creating simulated object configurations and extrapolating LP response scores
+    processed_df = process_responses(processed_df_empty, responses, scene_data)
+
+
+    # Augment data by rotating the LoS vectors
+
+
+
+
     #  Calculate Line-of-Sight (LoS) vectors from camera to objects.  This dataframe has one row per scene.  Each row gives vector to ref and vector to tgt.
-    los_vectors = calculate_LoS_vectors_df(scene_data)
-    print('los_vectors head:  ', los_vectors.head())
-
-    # Create empty DataFrame of preprocessed data
-    processed_data = pd.DataFrame(columns=PROCESSED_DATA_HEADERS)
+    # los_vectors = calculate_LoS_vectors_df(scene_data)
+    # print('los_vectors head:  ', los_vectors.head())
 
 
+    # Save dataframe
 
 
-    #  Scale Features
 
-    #  Data Augmentation using Rotation
+
+def process_responses(processed_df, responses, scene_data):
+    # Input:
+    # Output:  Pandas DataFrame with columns ['ResponseID', 'Real/Sim', 'SceneID', 'Object Configuration', 'Tgt Location', 'Ref Location', 'Camera Location', 'Vector to Target X', 'Vector to Target Y', 'Vector to Target Z', 'Vector to Reference X', 'Vector to Reference Y', 'Vector to Reference Z', 'LP Scores Vector']
+
+    # Iterate through responses and create each line of the processed_df
+    for index, response_row in responses.iterrows():
+        response_id = response_row['ResponseID']
+        real_sim = 'real'
+        print('ResponseID = ', response_id, '     Real/Sim = ', real_sim)
+
+        for scene_id in SCENE_LIST:
+            print('     scene_id = ', scene_id)
+            for lp_code_str in LP_CODES_IN_RAW_RESPONSES.keys():
+                obj_config = get_df_value(scene_data, 'Vector', 'SceneID', scene_id)
+                tgt_loc = get_df_value(scene_data, 'Sphere Location', 'SceneID', scene_id)
+                ref_loc = get_df_value(scene_data, 'Cube Location', 'SceneID', scene_id)
+                cam_loc = get_df_value(scene_data, 'Camera Location', 'SceneID', scene_id)
+                los_to_tgt = np.subtract(tgt_loc, cam_loc)
+                los_to_ref = np.subtract(ref_loc, cam_loc)
+
+                # Get the response score from the raw response data.  Column is coded using a string of the responseID and SceneID.  Response score is shifted due to mechanics of the Qualtrics survey.  A score of 36 in the raw data is a 1 on the Likert scale, and 42 in raw data is 7 on the Likert scale.
+
+                response_data_column = 'Q4.'+str(scene_id)+'_'+lp_code_str
+                raw_score = get_df_value(responses, response_data_column, 'ResponseID', response_id)
+                lp_score = raw_score - 35
+
+
+
+
+
+
+    return processed_df
+
+
 
 
 def calculate_LoS_vectors_df(scene_data):
@@ -107,6 +156,11 @@ def calculate_LoS_vectors_df(scene_data):
         los_vectors.loc[los_vectors['SceneID'] == scene, 'LoS_to_Ref_Y'] = los_to_ref[1]
         los_vectors.loc[los_vectors['SceneID'] == scene, 'LoS_to_Ref_Z'] = los_to_ref[2]
     return los_vectors
+
+
+def get_df_value(df, tgt_val_col, ref_col, ref_col_val):
+    tgt_val = df[df[ref_col] == ref_col_val][tgt_val_col].iloc[0]
+    return tgt_val
 
 
 def get_point_locations(scene_data, scene):
