@@ -51,7 +51,7 @@ NUM_SCENES = 4
 SCENE_LIST = list(range(1, NUM_SCENES + 1))
 
 # List of locative prepositions used in Mechanical Turk Survey
-# LP_LIST = ['above', 'against', 'behind', 'below', 'beside', 'close', 'front', 'left', 'near', 'next', 'on', 'on top', 'over', 'right']
+# LP_LIST = ['above', 'against', 'at', 'behind', 'below', 'beside', 'close', 'front', 'left', 'near', 'next', 'on', 'on top', 'over', 'right', 'vicinity']
 LP_LIST = ['above', 'against', 'behind']
 
 # In the raw response csv header, the locative prepositions are coded as numbers.  This dictionary enumerates which prepositions correlate with each number.
@@ -71,7 +71,7 @@ pd.set_option('display.width', 999999)
 
 
 def main():
-    # Load responses from MTurk survey
+    # Load responses from MTurk survey as a Pandas DataFrame
     responses = pd.read_csv(RESPONSES_FN)
     num_participants = responses.shape[0]
     num_columns = responses.shape[1]
@@ -79,17 +79,19 @@ def main():
     print('Responses DF Columns:  ', responses.columns)
     print(responses.head())
 
-    # Load scene data for the scenes presented to MTurk respondents
+    # Load scene data for the scenes presented to MTurk respondents as a Pandas DataFrame
     scene_data = pd.read_csv(SCENE_DATA_FN)
     print('Scene Data DF Columns:  ', scene_data.columns)
     print(scene_data.head())
 
     # Create output dataframe and populate with raw data in usable format(s) without augmentation
-    processed_df_empty = pd.DataFrame(columns=PROCESSED_DATA_HEADERS)
+    processed_df = process_responses(responses, scene_data)
 
-    # Augment data by creating simulated object configurations and extrapolating LP response scores
-    processed_df = process_responses(processed_df_empty, responses, scene_data)
+    # TODO:  Calculate inferred responses for the behind, below, and right LP questions on the raw data.
+    processed_inferred_df = infer_responses(processed_df)
 
+    # Augment data by creating simulated object configurations and extrapolating LP response scores.  Resulting DataFrame is a concatenation of processed_df and newly simulated data.
+    sim_df = add_simulated_configs(processed_df)
 
     # Augment data by rotating the LoS vectors
 
@@ -104,11 +106,27 @@ def main():
     # Save dataframe
 
 
+def add_simulated_configs(processed_df):
+    # Input:  Pandas DataFrame without configurations in behind, below, or right hemispheres
+    # Output:  Pandas DataFrame with simulated configurations in behind, below, and right hemispheres.
+
+    sim_configs = []
 
 
-def process_responses(processed_df, responses, scene_data):
+    return sim_configs
+
+
+def infer_responses(processed_df):
+
+    return processed_df
+
+
+def process_responses(responses, scene_data):
     # Input:
     # Output:  Pandas DataFrame with columns ['ResponseID', 'Real/Sim', 'SceneID', 'Object Configuration', 'Tgt Location', 'Ref Location', 'Camera Location', 'Vector to Target X', 'Vector to Target Y', 'Vector to Target Z', 'Vector to Reference X', 'Vector to Reference Y', 'Vector to Reference Z', 'LP Scores Vector']
+        # LP Scores Vector is a dictionary that uses the LP_LIST as keys.  Values are filled from raw data for all LPs except for behind, below, and right after completion of this method.  Those values are inferred in the following step in the main script.
+
+    processed_data = []
 
     # Iterate through responses and create each line of the processed_df
     for index, response_row in responses.iterrows():
@@ -118,28 +136,30 @@ def process_responses(processed_df, responses, scene_data):
 
         for scene_id in SCENE_LIST:
             print('     scene_id = ', scene_id)
+            obj_config = get_df_value(scene_data, 'Vector', 'SceneID', scene_id)
+            tgt_loc = get_df_value(scene_data, 'Sphere Location', 'SceneID', scene_id)
+            ref_loc = get_df_value(scene_data, 'Cube Location', 'SceneID', scene_id)
+            cam_loc = get_df_value(scene_data, 'Camera Location', 'SceneID', scene_id)
+            los_to_tgt = np.subtract(tgt_loc, cam_loc)
+            los_to_ref = np.subtract(ref_loc, cam_loc)
+            lp_score_dict = dict.fromkeys(LP_LIST)
+
+            # Build the LP scores vector
             for lp_code_str in LP_CODES_IN_RAW_RESPONSES.keys():
-                obj_config = get_df_value(scene_data, 'Vector', 'SceneID', scene_id)
-                tgt_loc = get_df_value(scene_data, 'Sphere Location', 'SceneID', scene_id)
-                ref_loc = get_df_value(scene_data, 'Cube Location', 'SceneID', scene_id)
-                cam_loc = get_df_value(scene_data, 'Camera Location', 'SceneID', scene_id)
-                los_to_tgt = np.subtract(tgt_loc, cam_loc)
-                los_to_ref = np.subtract(ref_loc, cam_loc)
-
-                # Get the response score from the raw response data.  Column is coded using a string of the responseID and SceneID.  Response score is shifted due to mechanics of the Qualtrics survey.  A score of 36 in the raw data is a 1 on the Likert scale, and 42 in raw data is 7 on the Likert scale.
-
-                response_data_column = 'Q4.'+str(scene_id)+'_'+lp_code_str
+                # Get the response score from the raw response data.  The csv header, which is the DataFrame column, is coded using a string of the responseID and SceneID (e.g., "Q4.27_9" is the column that represents responses for scene 27 and locative preposition code 9, which is "close").  Response score is shifted due to mechanics of the Qualtrics survey.  A score of 36 in the raw data is a 1 on the Likert scale, and 42 in raw data is 7 on the Likert scale.
+                response_data_column = 'Q4.' + str(scene_id) + '_' + lp_code_str
                 raw_score = get_df_value(responses, response_data_column, 'ResponseID', response_id)
-                lp_score = raw_score - 35
+                # Convert Qualtrics score to scale from 0 to 1
+                lp_score = (float(raw_score) - 36.0) / 6.0
+                lp_score_dict[LP_CODES_IN_RAW_RESPONSES[lp_code_str]] = lp_score
 
+            # Add data row to processed_data list
+            temp_row = [response_id, real_sim, scene_id, obj_config, tgt_loc, ref_loc, cam_loc, los_to_tgt[0], los_to_tgt[1], los_to_tgt[2], los_to_ref[0], los_to_ref[1], los_to_ref[2], lp_score_dict]
+            processed_data.append(temp_row)
 
-
-
-
-
+    # Create Pandas DataFrame from the processed data
+    processed_df = pd.DataFrame(processed_data, columns=PROCESSED_DATA_HEADERS)
     return processed_df
-
-
 
 
 def calculate_LoS_vectors_df(scene_data):
