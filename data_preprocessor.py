@@ -11,6 +11,7 @@ os.chdir(dname)
 # Add location of project-specific python modules to system path
 sys.path.insert(0, 'libs/')
 
+import ast
 import csv
 import copy
 import numpy as np
@@ -49,6 +50,7 @@ ROTATION_ANGLES = np.linspace(0, 2*np.pi, num=13)[1:-1]
 # NUM_SCENES = 84
 NUM_SCENES = 4
 SCENE_LIST = list(range(1, NUM_SCENES + 1))
+SCENE_DATA_DTYPES = {'SceneID': int, 'Vector': str, 'Camera Location X': float, 'Camera Location Y': float, 'Camera Location Z': float, 'Sphere-X': float, 'Sphere-Y': float, 'Sphere-Z': float, 'Cube-X': float, 'Cube-Y': float, 'Cube-Z': float}
 
 # List of locative prepositions used in Mechanical Turk Survey
 # LP_LIST = ['above', 'against', 'at', 'behind', 'below', 'beside', 'close', 'front', 'left', 'near', 'next', 'on', 'on top', 'over', 'right', 'vicinity']
@@ -58,11 +60,7 @@ LP_LIST = ['above', 'against', 'behind']
 LP_CODES_IN_RAW_RESPONSES = {'1': 'above', '2': 'against', '3': 'at', '4': 'beside', '5': 'front', '6': 'left', '7': 'on', '8': 'near', '9': 'close', '10': 'next', '11': 'over', '12': 'on top', '13': 'vicinity'}
 
 # Headers for training examples array/dictionary/dataframe
-PROCESSED_DATA_HEADERS = ['ResponseID', 'Real/Sim', 'SceneID', 'Object Configuration', 'Tgt Location', 'Ref Location', 'Camera Location', 'Vector to Target X', 'Vector to Target Y', 'Vector to Target Z', 'Vector to Reference X', 'Vector to Reference Y', 'Vector to Reference Z', 'LP Scores Vector']
-
-
-
-
+PROCESSED_DATA_HEADERS = ['ResponseID', 'Real/Sim', 'SceneID', 'Object Configuration', 'Tgt Location', 'Ref Location', 'Camera Location', 'Vector to Target X', 'Vector to Target Y', 'Vector to Target Z', 'Vector to Reference X', 'Vector to Reference Y', 'Vector to Reference Z', 'LP Scores Dict']
 
 # Set pandas options
 # pd.set_option('display.max_rows', None)
@@ -77,31 +75,26 @@ def main():
     num_columns = responses.shape[1]
     print("Num participants = ", num_participants, '          num_columns = ', num_columns)
     print('Responses DF Columns:  ', responses.columns)
+    print('Data Types:  ', responses.dtypes)
     print(responses.head())
 
     # Load scene data for the scenes presented to MTurk respondents as a Pandas DataFrame
-    scene_data = pd.read_csv(SCENE_DATA_FN)
+    scene_data = pd.read_csv(SCENE_DATA_FN, index_col='SceneID', dtype=SCENE_DATA_DTYPES)
     print('Scene Data DF Columns:  ', scene_data.columns)
+    print(' Data Types:  ', scene_data.dtypes)
     print(scene_data.head())
 
     # Create output dataframe and populate with raw data in usable format(s) without augmentation
     processed_df = process_responses(responses, scene_data)
 
-    # TODO:  Calculate inferred responses for the behind, below, and right LP questions on the raw data.
-    processed_inferred_df = infer_responses(processed_df)
+    # Calculate inferred responses for the behind, below, and right LP questions on the raw data.
+    processed_inferred_df = fill_inferred_responses(processed_df)
+    processed_inferred_df.to_csv('outputs/processed_inferred.csv')
 
     # Augment data by creating simulated object configurations and extrapolating LP response scores.  Resulting DataFrame is a concatenation of processed_df and newly simulated data.
-    sim_df = add_simulated_configs(processed_df)
+    # sim_df = add_simulated_configs(processed_inferred_df)
 
     # Augment data by rotating the LoS vectors
-
-
-
-
-    #  Calculate Line-of-Sight (LoS) vectors from camera to objects.  This dataframe has one row per scene.  Each row gives vector to ref and vector to tgt.
-    # los_vectors = calculate_LoS_vectors_df(scene_data)
-    # print('los_vectors head:  ', los_vectors.head())
-
 
     # Save dataframe
 
@@ -116,32 +109,87 @@ def add_simulated_configs(processed_df):
     return sim_configs
 
 
-def infer_responses(processed_df):
+def fill_inferred_responses(df):
+    # Input: Pandas DataFrame with columns ['ResponseID', 'Real/Sim', 'SceneID', 'Object Configuration', 'Tgt Location', 'Ref Location', 'Camera Location', 'Vector to Target X', 'Vector to Target Y', 'Vector to Target Z', 'Vector to Reference X', 'Vector to Reference Y', 'Vector to Reference Z', 'LP Scores']
+    # Output:  Same data structure as input but values for behind, below, and right LP scores inserted.
 
-    return processed_df
+    for index, row in df.iterrows():
+        obj_config = row['Object Configuration']
+        scores = row['LP Scores']
+        behind_score, below_score, right_score = infer_responses(obj_config, scores)
+        scores['behind'] = behind_score
+        scores['below'] = below_score
+        scores['right'] = right_score
+
+    return df
+
+
+def infer_responses(obj_config, scores):
+    above = scores['above']
+    front = scores['front']
+    left = scores['left']
+
+    below = above
+    behind = front
+    right = left
+
+    if obj_config == 'left':
+        right = reverse_score(left)
+    elif obj_config == 'front':
+        behind = reverse_score(front)
+    elif obj_config == 'up':
+        below = reverse_score(above)
+    elif obj_config == 'left-front':
+        right = reverse_score(left)
+        behind = reverse_score(front)
+    elif obj_config == 'left-up':
+        right = reverse_score(left)
+        below = reverse_score(above)
+    elif obj_config == 'up-front':
+        below = reverse_score(above)
+        behind = reverse_score(front)
+    else:
+        print('Error inferring response.  obj_config, scores = ', obj_config, scores)
+
+    return below, behind, right
+
+
+def reverse_score(score):
+    return 1.0 - score
 
 
 def process_responses(responses, scene_data):
     # Input:
-    # Output:  Pandas DataFrame with columns ['ResponseID', 'Real/Sim', 'SceneID', 'Object Configuration', 'Tgt Location', 'Ref Location', 'Camera Location', 'Vector to Target X', 'Vector to Target Y', 'Vector to Target Z', 'Vector to Reference X', 'Vector to Reference Y', 'Vector to Reference Z', 'LP Scores Vector']
+    # Output:  Pandas DataFrame with columns ['ResponseID', 'Real/Sim', 'SceneID', 'Object Configuration', 'Tgt Location', 'Ref Location', 'Camera Location', 'Vector to Target X', 'Vector to Target Y', 'Vector to Target Z', 'Vector to Reference X', 'Vector to Reference Y', 'Vector to Reference Z', 'LP Scores']
         # LP Scores Vector is a dictionary that uses the LP_LIST as keys.  Values are filled from raw data for all LPs except for behind, below, and right after completion of this method.  Those values are inferred in the following step in the main script.
 
     processed_data = []
 
     # Iterate through responses and create each line of the processed_df
-    for index, response_row in responses.iterrows():
-        response_id = response_row['ResponseID']
+    for indx1 in range(responses.shape[0]):
+        # response_row = responses.iloc[[indx1]]
+        # print('response_row = ', response_row)
+        response_id = responses['ResponseID'].iloc[indx1]
         real_sim = 'real'
         print('ResponseID = ', response_id, '     Real/Sim = ', real_sim)
 
         for scene_id in SCENE_LIST:
             print('     scene_id = ', scene_id)
-            obj_config = get_df_value(scene_data, 'Vector', 'SceneID', scene_id)
-            tgt_loc = get_df_value(scene_data, 'Sphere Location', 'SceneID', scene_id)
-            ref_loc = get_df_value(scene_data, 'Cube Location', 'SceneID', scene_id)
-            cam_loc = get_df_value(scene_data, 'Camera Location', 'SceneID', scene_id)
-            los_to_tgt = np.subtract(tgt_loc, cam_loc)
-            los_to_ref = np.subtract(ref_loc, cam_loc)
+            scene_data_row = scene_data.loc[[scene_id]]
+            obj_config = scene_data['Vector'].loc[scene_id]
+            # tgt_loc = scene_data['Sphere Location'].loc[scene_id]
+            tgt_x = scene_data['Sphere-X'].loc[scene_id]
+            tgt_y = scene_data['Sphere-Y'].loc[scene_id]
+            tgt_z = scene_data['Sphere-Z'].loc[scene_id]
+            ref_loc = scene_data['Cube Location'].loc[scene_id]
+            ref_x = scene_data['Cube-X'].loc
+            cam_loc = scene_data['Camera Location'].loc[scene_id]
+            # obj_config = get_df_value(scene_data, 'Vector', 'SceneID', scene_id)
+            # tgt_loc = get_df_value(scene_data, 'Sphere Location', 'SceneID', scene_id)
+            # ref_loc = get_df_value(scene_data, 'Cube Location', 'SceneID', scene_id)
+            # cam_loc = get_df_value(scene_data, 'Camera Location', 'SceneID', scene_id)
+            los_to_tgt = np.subtract(np.asarray(tgt_loc, dtype=float), np.asarray(cam_loc, dtype=float))
+            los_to_ref = np.subtract(np.asarray(ref_loc, dtype=float), np.asarray(cam_loc, dtype=float))
             lp_score_dict = dict.fromkeys(LP_LIST)
 
             # Build the LP scores vector
@@ -160,22 +208,6 @@ def process_responses(responses, scene_data):
     # Create Pandas DataFrame from the processed data
     processed_df = pd.DataFrame(processed_data, columns=PROCESSED_DATA_HEADERS)
     return processed_df
-
-
-def calculate_LoS_vectors_df(scene_data):
-    los_vectors = pd.DataFrame(columns=['SceneID', 'LoS_to_Tgt_X', 'LoS_to_Tgt_Y', 'LoS_to_Tgt_Z', 'LoS_to_Ref_X', 'LoS_to_Ref_Y', 'LoS_to_Ref_Z'])
-    los_vectors['SceneID'] = SCENE_LIST
-    for scene in SCENE_LIST:
-        cam_loc, tgt_loc, ref_loc = get_point_locations(scene_data, scene)
-        los_to_tgt = np.subtract(tgt_loc, cam_loc)
-        los_to_ref = np.subtract(ref_loc, cam_loc)
-        los_vectors.loc[los_vectors['SceneID'] == scene, 'LoS_to_Tgt_X'] = los_to_tgt[0]
-        los_vectors.loc[los_vectors['SceneID'] == scene, 'LoS_to_Tgt_Y'] = los_to_tgt[1]
-        los_vectors.loc[los_vectors['SceneID'] == scene, 'LoS_to_Tgt_Z'] = los_to_tgt[2]
-        los_vectors.loc[los_vectors['SceneID'] == scene, 'LoS_to_Ref_X'] = los_to_ref[0]
-        los_vectors.loc[los_vectors['SceneID'] == scene, 'LoS_to_Ref_Y'] = los_to_ref[1]
-        los_vectors.loc[los_vectors['SceneID'] == scene, 'LoS_to_Ref_Z'] = los_to_ref[2]
-    return los_vectors
 
 
 def get_df_value(df, tgt_val_col, ref_col, ref_col_val):
