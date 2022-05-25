@@ -70,7 +70,7 @@ pd.set_option('display.width', 999999)
 
 def main():
     # Load responses from MTurk survey as a Pandas DataFrame
-    responses = pd.read_csv(RESPONSES_FN)
+    responses = pd.read_csv(RESPONSES_FN, index_col='ResponseID')
     num_participants = responses.shape[0]
     num_columns = responses.shape[1]
     print("Num participants = ", num_participants, '          num_columns = ', num_columns)
@@ -89,21 +89,23 @@ def main():
 
     # Calculate inferred responses for the behind, below, and right LP questions on the raw data.
     processed_inferred_df = fill_inferred_responses(processed_df)
-    processed_inferred_df.to_csv('outputs/processed_inferred.csv')
+    processed_inferred_df.to_csv('outputs/step1_processed_inferred.csv')
 
     # Augment data by creating simulated object configurations and extrapolating LP response scores.  Resulting DataFrame is a concatenation of processed_df and newly simulated data.
-    # sim_df = add_simulated_configs(processed_inferred_df)
+    sim_df = add_simulated_configs(processed_inferred_df)
+    sim_df.to_csv('outputs/step2_simulated_configs.csv')
 
     # Augment data by rotating the LoS vectors
 
-    # Save dataframe
+    # Save dataframe as csv and as data structure
 
 
 def add_simulated_configs(processed_df):
     # Input:  Pandas DataFrame without configurations in behind, below, or right hemispheres
     # Output:  Pandas DataFrame with simulated configurations in behind, below, and right hemispheres.
 
-    sim_configs = []
+    sim = processed_df.copy()
+
 
 
     return sim_configs
@@ -115,7 +117,7 @@ def fill_inferred_responses(df):
 
     for index, row in df.iterrows():
         obj_config = row['Object Configuration']
-        scores = row['LP Scores']
+        scores = row['LP Scores Dict']
         behind_score, below_score, right_score = infer_responses(obj_config, scores)
         scores['behind'] = behind_score
         scores['below'] = below_score
@@ -166,10 +168,10 @@ def process_responses(responses, scene_data):
     processed_data = []
 
     # Iterate through responses and create each line of the processed_df
-    for indx1 in range(responses.shape[0]):
+    for response_id in responses.index.values.tolist():
         # response_row = responses.iloc[[indx1]]
         # print('response_row = ', response_row)
-        response_id = responses['ResponseID'].iloc[indx1]
+        # response_id = responses['ResponseID'].iloc[indx1]
         real_sim = 'real'
         print('ResponseID = ', response_id, '     Real/Sim = ', real_sim)
 
@@ -181,22 +183,32 @@ def process_responses(responses, scene_data):
             tgt_x = scene_data['Sphere-X'].loc[scene_id]
             tgt_y = scene_data['Sphere-Y'].loc[scene_id]
             tgt_z = scene_data['Sphere-Z'].loc[scene_id]
-            ref_loc = scene_data['Cube Location'].loc[scene_id]
-            ref_x = scene_data['Cube-X'].loc
-            cam_loc = scene_data['Camera Location'].loc[scene_id]
+            tgt_loc = (float(tgt_x), float(tgt_y), float(tgt_z))
+            # ref_loc = scene_data['Cube Location'].loc[scene_id]
+            ref_x = scene_data['Cube-X'].loc[scene_id]
+            ref_y = scene_data['Cube-Y'].loc[scene_id]
+            ref_z = scene_data['Cube-Z'].loc[scene_id]
+            ref_loc = (float(ref_x), float(ref_y), float(ref_z))
+            # cam_loc = scene_data['Camera Location'].loc[scene_id]
+            cam_x = scene_data['Camera Location X'].loc[scene_id]
+            cam_y = scene_data['Camera Location Y'].loc[scene_id]
+            cam_z = scene_data['Camera Location Z'].loc[scene_id]
+            cam_loc = (float(cam_x), float(cam_y), float(cam_z))
+
             # obj_config = get_df_value(scene_data, 'Vector', 'SceneID', scene_id)
             # tgt_loc = get_df_value(scene_data, 'Sphere Location', 'SceneID', scene_id)
             # ref_loc = get_df_value(scene_data, 'Cube Location', 'SceneID', scene_id)
             # cam_loc = get_df_value(scene_data, 'Camera Location', 'SceneID', scene_id)
-            los_to_tgt = np.subtract(np.asarray(tgt_loc, dtype=float), np.asarray(cam_loc, dtype=float))
-            los_to_ref = np.subtract(np.asarray(ref_loc, dtype=float), np.asarray(cam_loc, dtype=float))
+            los_to_tgt = np.subtract(tgt_loc, cam_loc)
+            los_to_ref = np.subtract(ref_loc, cam_loc)
             lp_score_dict = dict.fromkeys(LP_LIST)
 
             # Build the LP scores vector
             for lp_code_str in LP_CODES_IN_RAW_RESPONSES.keys():
                 # Get the response score from the raw response data.  The csv header, which is the DataFrame column, is coded using a string of the responseID and SceneID (e.g., "Q4.27_9" is the column that represents responses for scene 27 and locative preposition code 9, which is "close").  Response score is shifted due to mechanics of the Qualtrics survey.  A score of 36 in the raw data is a 1 on the Likert scale, and 42 in raw data is 7 on the Likert scale.
                 response_data_column = 'Q4.' + str(scene_id) + '_' + lp_code_str
-                raw_score = get_df_value(responses, response_data_column, 'ResponseID', response_id)
+                raw_score = responses[response_data_column].loc[response_id]
+
                 # Convert Qualtrics score to scale from 0 to 1
                 lp_score = (float(raw_score) - 36.0) / 6.0
                 lp_score_dict[LP_CODES_IN_RAW_RESPONSES[lp_code_str]] = lp_score
@@ -214,21 +226,6 @@ def get_df_value(df, tgt_val_col, ref_col, ref_col_val):
     tgt_val = df[df[ref_col] == ref_col_val][tgt_val_col].iloc[0]
     return tgt_val
 
-
-def get_point_locations(scene_data, scene):
-    cam_x = scene_data[scene_data['SceneID'] == scene]['Camera Location X'].iloc[0]
-    cam_y = scene_data[scene_data['SceneID'] == scene]['Camera Location Y'].iloc[0]
-    cam_z = scene_data[scene_data['SceneID'] == scene]['Camera Location Z'].iloc[0]
-    tgt_x = scene_data[scene_data['SceneID'] == scene]['Sphere-X'].iloc[0]
-    tgt_y = scene_data[scene_data['SceneID'] == scene]['Sphere-Y'].iloc[0]
-    tgt_z = scene_data[scene_data['SceneID'] == scene]['Sphere-Z'].iloc[0]
-    ref_x = scene_data[scene_data['SceneID'] == scene]['Cube-X'].iloc[0]
-    ref_y = scene_data[scene_data['SceneID'] == scene]['Cube-Y'].iloc[0]
-    ref_z = scene_data[scene_data['SceneID'] == scene]['Cube-Z'].iloc[0]
-    cam_loc = [cam_x, cam_y, cam_z]
-    tgt_loc = [tgt_x, tgt_y, tgt_z]
-    ref_loc = [ref_x, ref_y, ref_z]
-    return cam_loc, tgt_loc, ref_loc
 
 def rotate_point_about_z(pt, alpha):
     #  pt is array or tuple of floats
