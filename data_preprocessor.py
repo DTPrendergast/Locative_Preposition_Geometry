@@ -11,9 +11,7 @@ os.chdir(dname)
 # Add location of project-specific python modules to system path
 sys.path.insert(0, 'libs/')
 
-import ast
 import csv
-import copy
 import numpy as np
 import pandas as pd
 # import tensorflow as tf
@@ -60,7 +58,7 @@ LP_LIST = ['above', 'against', 'behind']
 LP_CODES_IN_RAW_RESPONSES = {'1': 'above', '2': 'against', '3': 'at', '4': 'beside', '5': 'front', '6': 'left', '7': 'on', '8': 'near', '9': 'close', '10': 'next', '11': 'over', '12': 'on top', '13': 'vicinity'}
 
 # Headers for training examples array/dictionary/dataframe
-PROCESSED_DATA_HEADERS = ['ResponseID', 'Real/Sim', 'SceneID', 'Object Configuration', 'Tgt Location', 'Ref Location', 'Camera Location', 'Vector to Target X', 'Vector to Target Y', 'Vector to Target Z', 'Vector to Reference X', 'Vector to Reference Y', 'Vector to Reference Z', 'LP Scores Dict']
+PROCESSED_DATA_HEADERS = ['ExampleID', 'ResponseID', 'Real/Sim', 'Simulated from Which Example', 'SceneID', 'Object Configuration', 'Tgt Location', 'Ref Location', 'Camera Location', 'LP Scores Dict']
 
 # Set pandas options
 # pd.set_option('display.max_rows', None)
@@ -87,15 +85,22 @@ def main():
     # Create output dataframe and populate with raw data in usable format(s) without augmentation
     processed_df = process_responses(responses, scene_data)
 
-    # Calculate inferred responses for the behind, below, and right LP questions on the raw data.
+
+    # Calculate inferred responses for the behind, below, and right LP questions on the raw data.  This process does not create new training examples, it only completes the LP score dictionary for the existing training examples.
     processed_inferred_df = fill_inferred_responses(processed_df)
-    processed_inferred_df.to_csv('outputs/step1_processed_inferred.csv')
+    # processed_inferred_df.to_csv('outputs/step1_processed_inferred.csv')
+    print('processed_inferred_df Columns:  ', processed_inferred_df.columns)
+    print('Data Types:  ', processed_inferred_df.dtypes)
+    print(processed_inferred_df.head())
 
-    # Augment data by creating simulated object configurations and extrapolating LP response scores.  Resulting DataFrame is a concatenation of processed_df and newly simulated data.
-    sim_df = add_simulated_configs(processed_inferred_df)
-    sim_df.to_csv('outputs/step2_simulated_configs.csv')
+    # Augment data by creating simulated object configurations and extrapolating LP response scores.  This process creates new training examples to complete the hemispheres of possible object configurations.  Resulting DataFrame is a concatenation of processed_df and newly simulated data.
+    df_with_sims = add_simulated_configs(processed_inferred_df)
+    print('sim_df Columns:  ', df_with_sims.columns)
+    print('Data Types:  ', df_with_sims.dtypes)
+    print(df_with_sims.head())
+    # df_with_sims.to_csv('outputs/step2_simulated_configs.csv')
 
-    # Augment data by rotating the LoS vectors
+    # Augment data by rotating the objects about the observer position (i.e., camera position)
 
     # Save dataframe as csv and as data structure
 
@@ -106,13 +111,47 @@ def add_simulated_configs(processed_df):
 
     sim = processed_df.copy()
 
+    #  Reverse the object configurations and reverse the object config descriptor (e.g. 'left')
+    new_ref_locs = sim['Tgt Location'].copy()
+    new_tgt_locs = sim['Ref Location'].copy()
+    new_obj_configs = sim['Object Configuration'].apply(reverse_obj_configs)
+    sim['Tgt Location'] = new_tgt_locs
+    sim['Ref Location'] = new_ref_locs
+    sim['Object Configuration'] = new_obj_configs
+
+    # For the sake of traceability, log the original ExampleID on which this simmed example is based
+    simmed_example = sim['ExampleID'].copy()
+    sim['Simulated from Which Example'] = simmed_example
+    sim['Real/Sim'] = 'sim'
+
+    # Continue numbering the unique ExampleID numbers
+    example_id = sim['ExampleID'].copy() + len(sim.index)
+    sim['ExampleID'] = example_id
+
+    # TODO:  Reverse the appropriate LP scores for this sim DataFrame
+    sim = infer_scores_for_reversed_configs(sim)
+
+    df_with_sims = pd.concat([processed_df, sim])
+
+    #    If not SPARSE_SIM_DATA:
+    #        If object config is left-front:  Create training examples for left-back, right-front, and right-back
+
+    #        If object config is left-up:  Create training examples for left-below, right-up, and right-below
+
+    #        If object config is up-front:  Create training examples for up-back, below-front, and below-back
+
+    return df_with_sims
 
 
-    return sim_configs
+def infer_scores_for_reversed_configs(df):
+
+
+
+    return df
 
 
 def fill_inferred_responses(df):
-    # Input: Pandas DataFrame with columns ['ResponseID', 'Real/Sim', 'SceneID', 'Object Configuration', 'Tgt Location', 'Ref Location', 'Camera Location', 'Vector to Target X', 'Vector to Target Y', 'Vector to Target Z', 'Vector to Reference X', 'Vector to Reference Y', 'Vector to Reference Z', 'LP Scores']
+    # Input: Pandas DataFrame where each example has an LP score dictionary which does not include scores for the behind, below, and right LPs for that scene.  Pandas DataFrame has columns ['ResponseID', 'Real/Sim', 'SceneID', 'Object Configuration', 'Tgt Location', 'Ref Location', 'Camera Location', 'Vector to Target X', 'Vector to Target Y', 'Vector to Target Z', 'Vector to Reference X', 'Vector to Reference Y', 'Vector to Reference Z', 'LP Scores']
     # Output:  Same data structure as input but values for behind, below, and right LP scores inserted.
 
     for index, row in df.iterrows():
@@ -156,6 +195,22 @@ def infer_responses(obj_config, scores):
     return below, behind, right
 
 
+def reverse_obj_configs(config):
+    new_config = None
+    if config == 'front': new_config = 'back'
+    elif config == 'left': new_config = 'right'
+    elif config == 'left': new_config = 'right'
+    elif config == 'left-front': new_config = 'right-back'
+    elif config == 'left-up': new_config = 'right-below'
+    elif config == 'up': new_config = 'below'
+    elif config == 'up-front': new_config = 'below-back'
+
+    if new_config is None:
+        print("Error reversing object configuration")
+
+    return new_config
+
+
 def reverse_score(score):
     return 1.0 - score
 
@@ -168,11 +223,13 @@ def process_responses(responses, scene_data):
     processed_data = []
 
     # Iterate through responses and create each line of the processed_df
+    example_id = 0
     for response_id in responses.index.values.tolist():
         # response_row = responses.iloc[[indx1]]
         # print('response_row = ', response_row)
         # response_id = responses['ResponseID'].iloc[indx1]
         real_sim = 'real'
+        sim_from_response = None
         print('ResponseID = ', response_id, '     Real/Sim = ', real_sim)
 
         for scene_id in SCENE_LIST:
@@ -199,8 +256,8 @@ def process_responses(responses, scene_data):
             # tgt_loc = get_df_value(scene_data, 'Sphere Location', 'SceneID', scene_id)
             # ref_loc = get_df_value(scene_data, 'Cube Location', 'SceneID', scene_id)
             # cam_loc = get_df_value(scene_data, 'Camera Location', 'SceneID', scene_id)
-            los_to_tgt = np.subtract(tgt_loc, cam_loc)
-            los_to_ref = np.subtract(ref_loc, cam_loc)
+            # los_to_tgt = np.subtract(tgt_loc, cam_loc)
+            # los_to_ref = np.subtract(ref_loc, cam_loc)
             lp_score_dict = dict.fromkeys(LP_LIST)
 
             # Build the LP scores vector
@@ -214,8 +271,9 @@ def process_responses(responses, scene_data):
                 lp_score_dict[LP_CODES_IN_RAW_RESPONSES[lp_code_str]] = lp_score
 
             # Add data row to processed_data list
-            temp_row = [response_id, real_sim, scene_id, obj_config, tgt_loc, ref_loc, cam_loc, los_to_tgt[0], los_to_tgt[1], los_to_tgt[2], los_to_ref[0], los_to_ref[1], los_to_ref[2], lp_score_dict]
+            temp_row = [example_id, response_id, real_sim, sim_from_response, scene_id, obj_config, tgt_loc, ref_loc, cam_loc, lp_score_dict]
             processed_data.append(temp_row)
+            example_id += 1
 
     # Create Pandas DataFrame from the processed data
     processed_df = pd.DataFrame(processed_data, columns=PROCESSED_DATA_HEADERS)
